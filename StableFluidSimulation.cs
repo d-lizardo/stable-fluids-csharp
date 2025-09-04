@@ -1,0 +1,281 @@
+using System;
+
+namespace FluidSimulation
+{
+    /// <summary>
+    /// A C# implementation of Jos Stam's Stable Fluids algorithm
+    /// Adapted for use in Rhino/Grasshopper plugins
+    /// </summary>
+    public class StableFluidSimulation
+    {
+        private readonly int width, height;
+        private readonly float dt;
+        private readonly float viscosity;
+        private readonly float diffusion;
+        
+        // Velocity fields (current and previous)
+        private float[,] u, v;           // Current velocity
+        private float[,] u_prev, v_prev; // Previous velocity
+        
+        // Density field for visualization
+        private float[,] density, density_prev;
+        
+        // Temporary arrays for solver
+        private float[,] temp1, temp2;
+
+        public StableFluidSimulation(int width, int height, float timeStep = 0.016f, 
+                                   float viscosity = 0.0001f, float diffusion = 0.0001f)
+        {
+            this.width = width;
+            this.height = height;
+            this.dt = timeStep;
+            this.viscosity = viscosity;
+            this.diffusion = diffusion;
+            
+            // Initialize arrays
+            u = new float[width, height];
+            v = new float[width, height];
+            u_prev = new float[width, height];
+            v_prev = new float[width, height];
+            
+            density = new float[width, height];
+            density_prev = new float[width, height];
+            
+            temp1 = new float[width, height];
+            temp2 = new float[width, height];
+        }
+
+        /// <summary>
+        /// Add force at a specific location
+        /// </summary>
+        public void AddForce(int x, int y, float forceX, float forceY)
+        {
+            if (x >= 0 && x < width && y >= 0 && y < height)
+            {
+                u[x, y] += forceX;
+                v[x, y] += forceY;
+            }
+        }
+
+        /// <summary>
+        /// Add density at a specific location (for visualization)
+        /// </summary>
+        public void AddDensity(int x, int y, float amount)
+        {
+            if (x >= 0 && x < width && y >= 0 && y < height)
+            {
+                density[x, y] += amount;
+            }
+        }
+
+        /// <summary>
+        /// Perform one simulation step
+        /// </summary>
+        public void Step()
+        {
+            // Velocity step
+            VelocityStep();
+            
+            // Density step (for visualization)
+            DensityStep();
+        }
+
+        private void VelocityStep()
+        {
+            // Add forces (already done via AddForce method)
+            
+            // Swap arrays
+            Swap(ref u, ref u_prev);
+            Swap(ref v, ref v_prev);
+            
+            // Diffusion
+            Diffuse(1, u, u_prev, viscosity, dt);
+            Diffuse(2, v, v_prev, viscosity, dt);
+            
+            // Project to make divergence-free
+            Project(u, v, u_prev, v_prev);
+            
+            // Swap again
+            Swap(ref u, ref u_prev);
+            Swap(ref v, ref v_prev);
+            
+            // Advection
+            Advect(1, u, u_prev, u_prev, v_prev, dt);
+            Advect(2, v, v_prev, u_prev, v_prev, dt);
+            
+            // Project again
+            Project(u, v, u_prev, v_prev);
+        }
+
+        private void DensityStep()
+        {
+            Swap(ref density, ref density_prev);
+            
+            // Diffuse density
+            Diffuse(0, density, density_prev, diffusion, dt);
+            
+            Swap(ref density, ref density_prev);
+            
+            // Advect density
+            Advect(0, density, density_prev, u, v, dt);
+        }
+
+        /// <summary>
+        /// Diffusion step using Gauss-Seidel relaxation
+        /// </summary>
+        private void Diffuse(int b, float[,] x, float[,] x0, float diff, float dt)
+        {
+            float a = dt * diff * (width - 2) * (height - 2);
+            LinearSolve(b, x, x0, a, 1 + 4 * a);
+        }
+
+        /// <summary>
+        /// Linear solver using Gauss-Seidel relaxation
+        /// </summary>
+        private void LinearSolve(int b, float[,] x, float[,] x0, float a, float c)
+        {
+            float cRecip = 1.0f / c;
+            
+            // Iterate to solve the linear system
+            for (int k = 0; k < 20; k++)
+            {
+                for (int j = 1; j < height - 1; j++)
+                {
+                    for (int i = 1; i < width - 1; i++)
+                    {
+                        x[i, j] = (x0[i, j] + a * (x[i + 1, j] + x[i - 1, j] + 
+                                                   x[i, j + 1] + x[i, j - 1])) * cRecip;
+                    }
+                }
+                SetBoundary(b, x);
+            }
+        }
+
+        /// <summary>
+        /// Advection step using semi-Lagrangian method
+        /// </summary>
+        private void Advect(int b, float[,] d, float[,] d0, float[,] velocX, float[,] velocY, float dt)
+        {
+            float i0, i1, j0, j1;
+            float dtx = dt * (width - 2);
+            float dty = dt * (height - 2);
+            float s0, s1, t0, t1;
+            float tmp1, tmp2, x, y;
+
+            float Nfloat = width - 2;
+            float Mfloat = height - 2;
+            int i, j;
+
+            for (j = 1; j < height - 1; j++)
+            {
+                for (i = 1; i < width - 1; i++)
+                {
+                    tmp1 = dtx * velocX[i, j];
+                    tmp2 = dty * velocY[i, j];
+                    x = i - tmp1;
+                    y = j - tmp2;
+
+                    if (x < 0.5f) x = 0.5f;
+                    if (x > Nfloat + 0.5f) x = Nfloat + 0.5f;
+                    i0 = (float)Math.Floor(x);
+                    i1 = i0 + 1.0f;
+                    
+                    if (y < 0.5f) y = 0.5f;
+                    if (y > Mfloat + 0.5f) y = Mfloat + 0.5f;
+                    j0 = (float)Math.Floor(y);
+                    j1 = j0 + 1.0f;
+
+                    s1 = x - i0;
+                    s0 = 1.0f - s1;
+                    t1 = y - j0;
+                    t0 = 1.0f - t1;
+
+                    int i0i = (int)i0;
+                    int i1i = (int)i1;
+                    int j0i = (int)j0;
+                    int j1i = (int)j1;
+
+                    d[i, j] = s0 * (t0 * d0[i0i, j0i] + t1 * d0[i0i, j1i]) +
+                              s1 * (t0 * d0[i1i, j0i] + t1 * d0[i1i, j1i]);
+                }
+            }
+            SetBoundary(b, d);
+        }
+
+        /// <summary>
+        /// Projection step to ensure divergence-free velocity field
+        /// </summary>
+        private void Project(float[,] velocX, float[,] velocY, float[,] p, float[,] div)
+        {
+            // Calculate divergence
+            for (int j = 1; j < height - 1; j++)
+            {
+                for (int i = 1; i < width - 1; i++)
+                {
+                    div[i, j] = -0.5f * (velocX[i + 1, j] - velocX[i - 1, j] + 
+                                         velocY[i, j + 1] - velocY[i, j - 1]) / width;
+                    p[i, j] = 0;
+                }
+            }
+            
+            SetBoundary(0, div);
+            SetBoundary(0, p);
+            LinearSolve(0, p, div, 1, 4);
+
+            // Subtract pressure gradient
+            for (int j = 1; j < height - 1; j++)
+            {
+                for (int i = 1; i < width - 1; i++)
+                {
+                    velocX[i, j] -= 0.5f * (p[i + 1, j] - p[i - 1, j]) * width;
+                    velocY[i, j] -= 0.5f * (p[i, j + 1] - p[i, j - 1]) * width;
+                }
+            }
+            
+            SetBoundary(1, velocX);
+            SetBoundary(2, velocY);
+        }
+
+        /// <summary>
+        /// Set boundary conditions
+        /// </summary>
+        private void SetBoundary(int b, float[,] x)
+        {
+            for (int i = 1; i < height - 1; i++)
+            {
+                x[0, i] = b == 1 ? -x[1, i] : x[1, i];
+                x[width - 1, i] = b == 1 ? -x[width - 2, i] : x[width - 2, i];
+            }
+            
+            for (int i = 1; i < width - 1; i++)
+            {
+                x[i, 0] = b == 2 ? -x[i, 1] : x[i, 1];
+                x[i, height - 1] = b == 2 ? -x[i, height - 2] : x[i, height - 2];
+            }
+
+            x[0, 0] = 0.5f * (x[1, 0] + x[0, 1]);
+            x[0, height - 1] = 0.5f * (x[1, height - 1] + x[0, height - 2]);
+            x[width - 1, 0] = 0.5f * (x[width - 2, 0] + x[width - 1, 1]);
+            x[width - 1, height - 1] = 0.5f * (x[width - 2, height - 1] + x[width - 1, height - 2]);
+        }
+
+        private void Swap(ref float[,] a, ref float[,] b)
+        {
+            var temp = a;
+            a = b;
+            b = temp;
+        }
+
+        // Public accessors for Grasshopper
+        public float[,] VelocityU => u;
+        public float[,] VelocityV => v;
+        public float[,] Density => density;
+        
+        public float GetVelocityMagnitude(int x, int y)
+        {
+            if (x >= 0 && x < width && y >= 0 && y < height)
+                return (float)Math.Sqrt(u[x, y] * u[x, y] + v[x, y] * v[x, y]);
+            return 0f;
+        }
+    }
+}
