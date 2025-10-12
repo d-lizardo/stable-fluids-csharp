@@ -84,6 +84,25 @@ namespace FluidSimulation.Grasshopper
                 simulationInitialized = true;
             }
 
+            // Convert curve into steps
+            //creat steps array
+            //divide curve by time
+            //get curve frames
+            //append curve points
+            //append curve tangents
+            //set force = input
+
+            // Get list of steps from input
+            // for (step i = 0, i < len(steps), i++)
+            // {
+            //     //remove previous forces (optional)
+            //     simulation.ResetForces(); //TODO implement resest of forces only
+            //     //Apply forces
+            //     simulation.AddForce(step.gridX, step.gridY, step.forceX, step.forceY); //Question: can this stack or is it unstable? Do I have to remove previous forces?
+            //     //Step forward
+            //     simulation.Step(timestep);
+            // }
+            
             // Apply forces
             if (forcePoints.Count > 0 && forceVectors.Count > 0)
             {
@@ -215,7 +234,7 @@ namespace FluidSimulation.Grasshopper
 
         public override Guid ComponentGuid
         {
-            get { return new Guid("12345678-1234-1234-1234-123456789ABC"); }
+            get { return new Guid("dd092c18-a225-42d4-8215-4497ed108ae0"); }
         }
     }
 
@@ -271,7 +290,68 @@ namespace FluidSimulation.Grasshopper
 
         public override Guid ComponentGuid
         {
-            get { return new Guid("87654321-4321-4321-4321-CBA987654321"); }
+            get { return new Guid("0440b637-bc3f-49cb-9d4b-70c12fe97a5b"); }
+        }
+    }
+
+    /// <summary>
+    /// Component to convert single curve to simulation steps
+    /// </summary>
+    public class MoveFromCurve : GH_Component
+    {
+        public MoveFromCurve()
+            : base("Curve to Single Move", "MoveFromCurve",
+                "Converts curve object to motion profile for fluid simu",
+                "Physics", "Simulation")
+        {
+        }
+        protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
+        {
+            pManager.AddCurveParameter("Curve", "C", "Curve To Traverse", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Speed", "S", "Constant Speed of Traversal", GH_ParamAccess.item, 1.0);
+            pManager.AddNumberParameter("Timestep", "dT", "Simulation Timestep", GH_ParamAccess.item, 0.016f);
+        }
+
+        protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
+        {
+            pManager.AddGenericParameter("Motion Profile", "MP", "Motion Profile object defining all steps for simulation", GH_ParamAccess.item);
+        }
+
+        protected override void SolveInstance(IGH_DataAccess DA)
+        {
+            // Get input parameters
+            Curve curve = null;
+            double speed = 1.0;
+            double timestep = 0.016;
+
+            DA.GetData(0, ref curve);
+            DA.GetData(1, ref speed);
+            DA.GetData(2, ref timestep);
+
+            // Calculate number of steps
+            float stepDistance = (float)(speed * timestep);
+
+            // Divide curve into points
+            var curveParams = curve.DivideByLength(stepDistance, true);
+
+            // Get points and tangents
+            var curvePoints = new List<Point3d>();
+            var curveTangents = new List<Vector3d>();
+            for (int i = 0; i < curveParams.Length; i++)
+            {
+                curvePoints.Add(curve.PointAt(curveParams[i]));
+                curveTangents.Add(curve.TangentAt(curveParams[i]));
+            }
+
+            // Create motion profile object
+            // var motionProfile = new MotionProfile(curvePoints, curveTangents);
+            // DA.SetData(0, motionProfile);
+        }
+        protected override System.Drawing.Bitmap Icon => null;
+
+        public override Guid ComponentGuid
+        {
+            get { return new Guid("d57e5ab1-2a29-4500-9781-f353aa591f0b"); }
         }
     }
 }
