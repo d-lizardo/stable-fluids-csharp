@@ -75,9 +75,9 @@ namespace FluidSimulation.Grasshopper
             DA.GetData(9, ref step);
 
             // Initialize or reset simulation
-            if (!simulationInitialized || reset || 
-                simulation.VelocityU.GetLength(0) != width || 
-                simulation.VelocityU.GetLength(1) != height)
+            if (!simulationInitialized || reset ||
+                (simulation != null && (simulation.VelocityU.GetLength(0) != width ||
+                simulation.VelocityU.GetLength(1) != height)))
             {
                 simulation = new StableFluidSimulation(width, height, 0.016f, (float)viscosity, (float)diffusion);
                 visualization = new FluidVisualization(simulation);
@@ -91,13 +91,13 @@ namespace FluidSimulation.Grasshopper
                 for (int i = 0; i < minCount; i++)
                 {
                     // Convert world coordinates to grid coordinates
-                    int gridX = (int)(forcePoints[i].X * width);
-                    int gridY = (int)(forcePoints[i].Y * height);
-                    
+                    int gridX = (int)Math.Max(0, Math.Min(width - 1, forcePoints[i].X * width));
+                    int gridY = (int)Math.Max(0, Math.Min(height - 1, forcePoints[i].Y * height));
+
                     // Scale force vectors appropriately
                     float forceX = (float)(forceVectors[i].X * 10.0);
                     float forceY = (float)(forceVectors[i].Y * 10.0);
-                    
+
                     simulation.AddForce(gridX, gridY, forceX, forceY);
                 }
             }
@@ -108,9 +108,9 @@ namespace FluidSimulation.Grasshopper
                 int minCount = Math.Min(densityPoints.Count, densityAmounts.Count);
                 for (int i = 0; i < minCount; i++)
                 {
-                    int gridX = (int)(densityPoints[i].X * width);
-                    int gridY = (int)(densityPoints[i].Y * height);
-                    
+                    int gridX = (int)Math.Max(0, Math.Min(width - 1, densityPoints[i].X * width));
+                    int gridY = (int)Math.Max(0, Math.Min(height - 1, densityPoints[i].Y * height));
+
                     simulation.AddDensity(gridX, gridY, (float)densityAmounts[i]);
                 }
             }
@@ -218,11 +218,7 @@ namespace FluidSimulation.Grasshopper
             get { return new Guid("12345678-1234-1234-1234-123456789ABC"); }
         }
     }
-}
 
-// Additional helper component for mouse interaction
-namespace FluidSimulation.Grasshopper
-{
     /// <summary>
     /// Component to convert mouse/cursor position to fluid forces
     /// </summary>
