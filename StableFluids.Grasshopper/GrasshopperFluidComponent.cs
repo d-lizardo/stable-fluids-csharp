@@ -29,18 +29,13 @@ namespace FluidSimulation.Grasshopper
             pManager.AddIntegerParameter("Height", "H", "Simulation grid height", GH_ParamAccess.item, 64);
             pManager.AddNumberParameter("Viscosity", "Visc", "Fluid viscosity", GH_ParamAccess.item, 0.0001);
             pManager.AddNumberParameter("Diffusion", "Diff", "Density diffusion rate", GH_ParamAccess.item, 0.0001);
-            pManager.AddPointParameter("Force Points", "FP", "Points where forces are applied", GH_ParamAccess.list);
-            pManager.AddVectorParameter("Force Vectors", "FV", "Force vectors to apply", GH_ParamAccess.list);
-            pManager.AddPointParameter("Density Points", "DP", "Points where density is added", GH_ParamAccess.list);
-            pManager.AddNumberParameter("Density Amount", "DA", "Amount of density to add", GH_ParamAccess.list);
+            pManager.AddGenericParameter("Motion Profile", "MP", "Motion profile defining the movement through fluid", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Progress", "P", "Progress through motion profile (0.0 to 1.0)", GH_ParamAccess.item, 0.0);
+            pManager.AddNumberParameter("Force Scale", "FS", "Scale factor for applied forces", GH_ParamAccess.item, 10.0);
             pManager.AddBooleanParameter("Reset", "R", "Reset simulation", GH_ParamAccess.item, false);
-            pManager.AddBooleanParameter("Step", "S", "Perform simulation step", GH_ParamAccess.item, false);
 
-            // Make some parameters optional
-            pManager[4].Optional = true; // Force Points
-            pManager[5].Optional = true; // Force Vectors
-            pManager[6].Optional = true; // Density Points
-            pManager[7].Optional = true; // Density Amount
+            // Make motion profile optional for backward compatibility
+            pManager[4].Optional = true; // Motion Profile
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -57,22 +52,19 @@ namespace FluidSimulation.Grasshopper
             // Get input parameters
             int width = 64, height = 64;
             double viscosity = 0.0001, diffusion = 0.0001;
-            var forcePoints = new List<Point3d>();
-            var forceVectors = new List<Vector3d>();
-            var densityPoints = new List<Point3d>();
-            var densityAmounts = new List<double>();
-            bool reset = false, step = false;
+            FluidSimulation.MotionProfile motionProfile = null;
+            double progress = 0.0;
+            double forceScale = 10.0;
+            bool reset = false;
 
             DA.GetData(0, ref width);
             DA.GetData(1, ref height);
             DA.GetData(2, ref viscosity);
             DA.GetData(3, ref diffusion);
-            DA.GetDataList(4, forcePoints);
-            DA.GetDataList(5, forceVectors);
-            DA.GetDataList(6, densityPoints);
-            DA.GetDataList(7, densityAmounts);
-            DA.GetData(8, ref reset);
-            DA.GetData(9, ref step);
+            DA.GetData(4, ref motionProfile);
+            DA.GetData(5, ref progress);
+            DA.GetData(6, ref forceScale);
+            DA.GetData(7, ref reset);
 
             // Initialize or reset simulation
             if (!simulationInitialized || reset ||
@@ -84,60 +76,27 @@ namespace FluidSimulation.Grasshopper
                 simulationInitialized = true;
             }
 
-            // Convert curve into steps
-            //creat steps array
-            //divide curve by time
-            //get curve frames
-            //append curve points
-            //append curve tangents
-            //set force = input
-
-            // Get list of steps from input
-            // for (step i = 0, i < len(steps), i++)
-            // {
-            //     //remove previous forces (optional)
-            //     simulation.ResetForces(); //TODO implement resest of forces only
-            //     //Apply forces
-            //     simulation.AddForce(step.gridX, step.gridY, step.forceX, step.forceY); //Question: can this stack or is it unstable? Do I have to remove previous forces?
-            //     //Step forward
-            //     simulation.Step(timestep);
-            // }
-            
-            // Apply forces
-            if (forcePoints.Count > 0 && forceVectors.Count > 0)
+            // Execute motion profile if provided
+            if (motionProfile != null && progress > 0)
             {
-                int minCount = Math.Min(forcePoints.Count, forceVectors.Count);
-                for (int i = 0; i < minCount; i++)
-                {
-                    // Convert world coordinates to grid coordinates
-                    int gridX = (int)Math.Max(0, Math.Min(width - 1, forcePoints[i].X * width));
-                    int gridY = (int)Math.Max(0, Math.Min(height - 1, forcePoints[i].Y * height));
+                // Reset simulation to clean state first
+                simulation = new StableFluidSimulation(width, height, 0.016f, (float)viscosity, (float)diffusion);
+                visualization = new FluidVisualization(simulation);
 
-                    // Scale force vectors appropriately
-                    float forceX = (float)(forceVectors[i].X * 10.0);
-                    float forceY = (float)(forceVectors[i].Y * 10.0);
+                // Execute motion profile up to the specified progress
+                simulation.ExecuteMotionProfile(motionProfile, (float)progress, (float)forceScale);
 
-                    simulation.AddForce(gridX, gridY, forceX, forceY);
-                }
+                // Debug output (you can remove this later)
+                int stepsExecuted = (int)(motionProfile.StepCount * Math.Max(0, Math.Min(1, progress)));
+                this.Message = $"Steps: {stepsExecuted}/{motionProfile.StepCount}";
             }
-
-            // Add density
-            if (densityPoints.Count > 0 && densityAmounts.Count > 0)
+            else if (motionProfile == null)
             {
-                int minCount = Math.Min(densityPoints.Count, densityAmounts.Count);
-                for (int i = 0; i < minCount; i++)
-                {
-                    int gridX = (int)Math.Max(0, Math.Min(width - 1, densityPoints[i].X * width));
-                    int gridY = (int)Math.Max(0, Math.Min(height - 1, densityPoints[i].Y * height));
-
-                    simulation.AddDensity(gridX, gridY, (float)densityAmounts[i]);
-                }
+                this.Message = "No motion profile";
             }
-
-            // Perform simulation step
-            if (step)
+            else
             {
-                simulation.Step();
+                this.Message = $"Progress: {progress:F2}";
             }
 
             // Generate outputs
@@ -344,8 +303,8 @@ namespace FluidSimulation.Grasshopper
             }
 
             // Create motion profile object
-            // var motionProfile = new MotionProfile(curvePoints, curveTangents);
-            // DA.SetData(0, motionProfile);
+            var motionProfile = new FluidSimulation.MotionProfile(curvePoints, curveTangents, (float)timestep);
+            DA.SetData(0, motionProfile);
         }
         protected override System.Drawing.Bitmap Icon => null;
 

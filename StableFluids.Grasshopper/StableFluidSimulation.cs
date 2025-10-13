@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using Rhino.Geometry;
 
 namespace FluidSimulation
 {
@@ -277,5 +279,124 @@ namespace FluidSimulation
                 return (float)Math.Sqrt(u[x, y] * u[x, y] + v[x, y] * v[x, y]);
             return 0f;
         }
+
+        /// <summary>
+        /// Clear all forces from the velocity field (but preserve existing velocity)
+        /// This should be called before applying new forces for each step
+        /// Note: Since forces are applied directly to the velocity field in AddForce,
+        /// we can't easily separate "forces" from "velocity". This method is a placeholder
+        /// for a more sophisticated force management system.
+        /// </summary>
+        public void ClearForces()
+        {
+            // In the current implementation, forces are applied directly to the velocity field
+            // So there's no separate "force" field to clear. This is intentionally empty.
+            // For a more realistic simulation, you might want to implement a separate force
+            // accumulation system that gets applied and then cleared each step.
+        }
+
+        /// <summary>
+        /// Execute a motion profile step by step up to a given fraction
+        /// This simulates dragging an object through fluid
+        /// </summary>
+        public void ExecuteMotionProfile(MotionProfile profile, float fraction, float forceScale = 10.0f)
+        {
+            if (profile == null || profile.Steps.Count == 0) return;
+
+            int maxStep = (int)(profile.Steps.Count * Math.Max(0, Math.Min(1, fraction)));
+
+            for (int i = 0; i < maxStep; i++)
+            {
+                var step = profile.Steps[i];
+
+                // Convert world coordinates to grid coordinates (assuming 0-1 input range)
+                int gridX = (int)Math.Max(0, Math.Min(width - 1, step.Position.X * width));
+                int gridY = (int)Math.Max(0, Math.Min(height - 1, step.Position.Y * height));
+
+                // Apply impulse force based on velocity (tangent direction)
+                // This represents the force of dragging an object through the fluid
+                float forceX = (float)(step.Velocity.X * forceScale);
+                float forceY = (float)(step.Velocity.Y * forceScale);
+
+                // Apply force in a small area around the point to make it more realistic
+                int radius = 2; // Apply force in a 5x5 area
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dy = -radius; dy <= radius; dy++)
+                    {
+                        int fx = gridX + dx;
+                        int fy = gridY + dy;
+                        if (fx >= 0 && fx < width && fy >= 0 && fy < height)
+                        {
+                            // Reduce force with distance from center
+                            float distance = (float)Math.Sqrt(dx * dx + dy * dy);
+                            float falloff = Math.Max(0, 1.0f - distance / (radius + 1));
+                            AddForce(fx, fy, forceX * falloff, forceY * falloff);
+                        }
+                    }
+                }
+
+                // Add density to visualize the path
+                AddDensity(gridX, gridY, 30.0f);
+
+                // Step the simulation forward
+                Step();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Represents a single step in a motion profile
+    /// </summary>
+    public class MotionStep
+    {
+        public Point3d Position { get; set; }
+        public Vector3d Velocity { get; set; }
+        public float Time { get; set; }
+
+        public MotionStep(Point3d position, Vector3d velocity, float time)
+        {
+            Position = position;
+            Velocity = velocity;
+            Time = time;
+        }
+    }
+
+    /// <summary>
+    /// Represents a complete motion profile for fluid simulation
+    /// Contains a sequence of positions and velocities over time
+    /// </summary>
+    public class MotionProfile
+    {
+        public List<MotionStep> Steps { get; private set; }
+        public float TotalTime { get; private set; }
+
+        public MotionProfile()
+        {
+            Steps = new List<MotionStep>();
+            TotalTime = 0f;
+        }
+
+        public MotionProfile(List<Point3d> positions, List<Vector3d> velocities, float timeStep)
+        {
+            Steps = new List<MotionStep>();
+            TotalTime = 0f;
+
+            int count = Math.Min(positions.Count, velocities.Count);
+            for (int i = 0; i < count; i++)
+            {
+                var step = new MotionStep(positions[i], velocities[i], i * timeStep);
+                Steps.Add(step);
+                TotalTime = step.Time;
+            }
+        }
+
+        public void AddStep(Point3d position, Vector3d velocity, float time)
+        {
+            Steps.Add(new MotionStep(position, velocity, time));
+            TotalTime = Math.Max(TotalTime, time);
+        }
+
+        public int StepCount => Steps.Count;
     }
 }
