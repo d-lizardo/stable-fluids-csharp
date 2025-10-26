@@ -299,7 +299,8 @@ namespace FluidSimulation
         /// Execute a motion profile step by step up to a given fraction
         /// This simulates dragging an object through fluid
         /// </summary>
-        public void ExecuteMotionProfile(MotionProfile profile, float fraction, float forceScale = 10.0f)
+        public void ExecuteMotionProfile(MotionProfile profile, float fraction, float forceScale = 10.0f,
+                                        double worldWidth = 100.0, double worldHeight = 100.0)
         {
             if (profile == null || profile.Steps.Count == 0) return;
 
@@ -309,14 +310,20 @@ namespace FluidSimulation
             {
                 var step = profile.Steps[i];
 
-                // Convert world coordinates to grid coordinates (assuming 0-1 input range)
-                int gridX = (int)Math.Max(0, Math.Min(width - 1, step.Position.X * width));
-                int gridY = (int)Math.Max(0, Math.Min(height - 1, step.Position.Y * height));
+                // Convert world coordinates to grid coordinates
+                double normalizedX = step.Position.X / worldWidth;
+                double normalizedY = step.Position.Y / worldHeight;
+                int gridX = (int)Math.Max(0, Math.Min(width - 1, normalizedX * width));
+                int gridY = (int)Math.Max(0, Math.Min(height - 1, normalizedY * height));
+
+                // Normalize velocity to grid scale
+                double velocityScaleX = width / worldWidth;
+                double velocityScaleY = height / worldHeight;
 
                 // Apply impulse force based on velocity (tangent direction)
                 // This represents the force of dragging an object through the fluid
-                float forceX = (float)(step.Velocity.X * forceScale);
-                float forceY = (float)(step.Velocity.Y * forceScale);
+                float forceX = (float)(step.Velocity.X * velocityScaleX * forceScale);
+                float forceY = (float)(step.Velocity.Y * velocityScaleY * forceScale);
 
                 // Apply force in a small area around the point to make it more realistic
                 int radius = 2; // Apply force in a 5x5 area

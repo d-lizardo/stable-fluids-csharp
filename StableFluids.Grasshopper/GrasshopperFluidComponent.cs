@@ -27,6 +27,8 @@ namespace FluidSimulation.Grasshopper
         {
             pManager.AddIntegerParameter("Width", "W", "Simulation grid width", GH_ParamAccess.item, 64);
             pManager.AddIntegerParameter("Height", "H", "Simulation grid height", GH_ParamAccess.item, 64);
+            pManager.AddNumberParameter("World Width", "WW", "Physical width of simulation domain", GH_ParamAccess.item, 100.0);
+            pManager.AddNumberParameter("World Height", "WH", "Physical height of simulation domain", GH_ParamAccess.item, 100.0);
             pManager.AddNumberParameter("Viscosity", "Visc", "Fluid viscosity", GH_ParamAccess.item, 0.0001);
             pManager.AddNumberParameter("Diffusion", "Diff", "Density diffusion rate", GH_ParamAccess.item, 0.0001);
             pManager.AddGenericParameter("Motion Profile", "MP", "Motion profile defining the movement through fluid", GH_ParamAccess.item);
@@ -35,13 +37,13 @@ namespace FluidSimulation.Grasshopper
             pManager.AddBooleanParameter("Reset", "R", "Reset simulation", GH_ParamAccess.item, false);
 
             // Make motion profile optional for backward compatibility
-            pManager[4].Optional = true; // Motion Profile
+            pManager[6].Optional = true; // Motion Profile
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
         {
-            pManager.AddGenericParameter("Velocity Bitmap", "VB", "Bitmap showing velocity field", GH_ParamAccess.item);
-            pManager.AddGenericParameter("Density Bitmap", "DB", "Bitmap showing density field", GH_ParamAccess.item);
+            pManager.AddMeshParameter("Velocity Field", "VF", "Colored mesh showing velocity field", GH_ParamAccess.item);
+            pManager.AddMeshParameter("Density Field", "DF", "Colored mesh showing density field", GH_ParamAccess.item);
             pManager.AddCurveParameter("Streamlines", "SL", "Streamlines showing flow", GH_ParamAccess.list);
             pManager.AddLineParameter("Velocity Vectors", "VV", "Velocity vectors", GH_ParamAccess.list);
             pManager.AddNumberParameter("Velocity Magnitudes", "VM", "Velocity magnitudes at grid points", GH_ParamAccess.list);
@@ -51,6 +53,7 @@ namespace FluidSimulation.Grasshopper
         {
             // Get input parameters
             int width = 64, height = 64;
+            double worldWidth = 100.0, worldHeight = 100.0;
             double viscosity = 0.0001, diffusion = 0.0001;
             FluidSimulation.MotionProfile motionProfile = null;
             double progress = 0.0;
@@ -59,12 +62,14 @@ namespace FluidSimulation.Grasshopper
 
             DA.GetData(0, ref width);
             DA.GetData(1, ref height);
-            DA.GetData(2, ref viscosity);
-            DA.GetData(3, ref diffusion);
-            DA.GetData(4, ref motionProfile);
-            DA.GetData(5, ref progress);
-            DA.GetData(6, ref forceScale);
-            DA.GetData(7, ref reset);
+            DA.GetData(2, ref worldWidth);
+            DA.GetData(3, ref worldHeight);
+            DA.GetData(4, ref viscosity);
+            DA.GetData(5, ref diffusion);
+            DA.GetData(6, ref motionProfile);
+            DA.GetData(7, ref progress);
+            DA.GetData(8, ref forceScale);
+            DA.GetData(9, ref reset);
 
             // Initialize or reset simulation
             if (!simulationInitialized || reset ||
@@ -83,8 +88,8 @@ namespace FluidSimulation.Grasshopper
                 simulation = new StableFluidSimulation(width, height, 0.016f, (float)viscosity, (float)diffusion);
                 visualization = new FluidVisualization(simulation);
 
-                // Execute motion profile up to the specified progress
-                simulation.ExecuteMotionProfile(motionProfile, (float)progress, (float)forceScale);
+                // Execute motion profile up to the specified progress with world scale
+                simulation.ExecuteMotionProfile(motionProfile, (float)progress, (float)forceScale, worldWidth, worldHeight);
 
                 // Debug output (you can remove this later)
                 int stepsExecuted = (int)(motionProfile.StepCount * Math.Max(0, Math.Min(1, progress)));
@@ -99,25 +104,107 @@ namespace FluidSimulation.Grasshopper
                 this.Message = $"Progress: {progress:F2}";
             }
 
-            // Generate outputs
-            var velocityBitmap = visualization.CreateVelocityMagnitudeBitmap();
-            var densityBitmap = visualization.CreateDensityBitmap();
-            var streamlines = GenerateStreamlineCurves();
-            var velocityVectors = GenerateVelocityLines();
+            // Generate outputs with world scale
+            var velocityMesh = CreateVelocityMesh(worldWidth, worldHeight);
+            var densityMesh = CreateDensityMesh(worldWidth, worldHeight);
+            var streamlines = GenerateStreamlineCurves(worldWidth, worldHeight);
+            var velocityVectors = GenerateVelocityLines(worldWidth, worldHeight);
             var velocityMagnitudes = GetVelocityMagnitudes();
 
             // Set outputs
-            DA.SetData(0, velocityBitmap);
-            DA.SetData(1, densityBitmap);
+            DA.SetData(0, velocityMesh);
+            DA.SetData(1, densityMesh);
             DA.SetDataList(2, streamlines);
             DA.SetDataList(3, velocityVectors);
             DA.SetDataList(4, velocityMagnitudes);
         }
 
-        private List<Curve> GenerateStreamlineCurves()
+        private Rhino.Geometry.Mesh CreateVelocityMesh(double worldWidth, double worldHeight)
+        {
+            var mesh = new Rhino.Geometry.Mesh();
+            int gridWidth = simulation.VelocityU.GetLength(0);
+            int gridHeight = simulation.VelocityU.GetLength(1);
+
+            float maxMagnitude = GetMaxVelocityMagnitude();
+            if (maxMagnitude == 0) maxMagnitude = 1;
+
+            // Create vertices
+            for (int y = 0; y < gridHeight; y++)
+            {
+                for (int x = 0; x < gridWidth; x++)
+                {
+                    double worldX = (x / (double)(gridWidth - 1)) * worldWidth;
+                    double worldY = (y / (double)(gridHeight - 1)) * worldHeight;
+                    mesh.Vertices.Add(worldX, worldY, 0);
+
+                    // Add vertex color based on velocity magnitude
+                    float magnitude = simulation.GetVelocityMagnitude(x, y);
+                    float normalized = Math.Min(magnitude / maxMagnitude, 1.0f);
+                    int intensity = (int)(normalized * 255);
+                    mesh.VertexColors.Add(intensity, 0, 255 - intensity);
+                }
+            }
+
+            // Create faces
+            for (int y = 0; y < gridHeight - 1; y++)
+            {
+                for (int x = 0; x < gridWidth - 1; x++)
+                {
+                    int i = y * gridWidth + x;
+                    mesh.Faces.AddFace(i, i + 1, i + gridWidth + 1, i + gridWidth);
+                }
+            }
+
+            mesh.Normals.ComputeNormals();
+            return mesh;
+        }
+
+        private Rhino.Geometry.Mesh CreateDensityMesh(double worldWidth, double worldHeight)
+        {
+            var mesh = new Rhino.Geometry.Mesh();
+            int gridWidth = simulation.VelocityU.GetLength(0);
+            int gridHeight = simulation.VelocityU.GetLength(1);
+
+            float maxDensity = GetMaxDensity();
+            if (maxDensity == 0) maxDensity = 1;
+
+            // Create vertices
+            for (int y = 0; y < gridHeight; y++)
+            {
+                for (int x = 0; x < gridWidth; x++)
+                {
+                    double worldX = (x / (double)(gridWidth - 1)) * worldWidth;
+                    double worldY = (y / (double)(gridHeight - 1)) * worldHeight;
+                    mesh.Vertices.Add(worldX, worldY, 0);
+
+                    // Add vertex color based on density
+                    float density = simulation.Density[x, y];
+                    float normalized = Math.Min(density / maxDensity, 1.0f);
+                    int intensity = (int)(normalized * 255);
+                    mesh.VertexColors.Add(intensity, intensity, intensity);
+                }
+            }
+
+            // Create faces
+            for (int y = 0; y < gridHeight - 1; y++)
+            {
+                for (int x = 0; x < gridWidth - 1; x++)
+                {
+                    int i = y * gridWidth + x;
+                    mesh.Faces.AddFace(i, i + 1, i + gridWidth + 1, i + gridWidth);
+                }
+            }
+
+            mesh.Normals.ComputeNormals();
+            return mesh;
+        }
+
+        private List<Curve> GenerateStreamlineCurves(double worldWidth, double worldHeight)
         {
             var curves = new List<Curve>();
             var streamlines = visualization.GenerateStreamlines(15, 80, 0.4f);
+            int gridWidth = simulation.VelocityU.GetLength(0);
+            int gridHeight = simulation.VelocityU.GetLength(1);
 
             foreach (var streamline in streamlines)
             {
@@ -126,9 +213,9 @@ namespace FluidSimulation.Grasshopper
                 var points = new List<Point3d>();
                 foreach (var pt in streamline)
                 {
-                    // Convert grid coordinates to world coordinates (0-1 range)
-                    double x = pt.X / simulation.VelocityU.GetLength(0);
-                    double y = pt.Y / simulation.VelocityU.GetLength(1);
+                    // Convert grid coordinates to world coordinates
+                    double x = (pt.X / gridWidth) * worldWidth;
+                    double y = (pt.Y / gridHeight) * worldHeight;
                     points.Add(new Point3d(x, y, 0));
                 }
 
@@ -142,23 +229,25 @@ namespace FluidSimulation.Grasshopper
             return curves;
         }
 
-        private List<Line> GenerateVelocityLines()
+        private List<Line> GenerateVelocityLines(double worldWidth, double worldHeight)
         {
             var lines = new List<Line>();
             var vectors = visualization.GetVelocityVectors(6);
+            int gridWidth = simulation.VelocityU.GetLength(0);
+            int gridHeight = simulation.VelocityU.GetLength(1);
 
             foreach (var vector in vectors)
             {
                 // Convert to world coordinates
-                double x = vector.X / (double)simulation.VelocityU.GetLength(0);
-                double y = vector.Y / (double)simulation.VelocityU.GetLength(1);
-                
+                double x = (vector.X / gridWidth) * worldWidth;
+                double y = (vector.Y / gridHeight) * worldHeight;
+
                 var start = new Point3d(x, y, 0);
-                
-                // Scale velocity for visualization
-                double scale = 0.05; // Adjust this for better visualization
+
+                // Scale velocity for visualization (proportional to world size)
+                double scale = Math.Min(worldWidth, worldHeight) * 0.02;
                 var end = new Point3d(x + vector.U * scale, y + vector.V * scale, 0);
-                
+
                 lines.Add(new Line(start, end));
             }
 
@@ -180,6 +269,40 @@ namespace FluidSimulation.Grasshopper
             }
 
             return magnitudes;
+        }
+
+        private float GetMaxVelocityMagnitude()
+        {
+            float max = 0;
+            int width = simulation.VelocityU.GetLength(0);
+            int height = simulation.VelocityU.GetLength(1);
+
+            for (int x = 0; x < width; x++)
+            {
+                for (int y = 0; y < height; y++)
+                {
+                    float magnitude = simulation.GetVelocityMagnitude(x, y);
+                    if (magnitude > max) max = magnitude;
+                }
+            }
+            return max;
+        }
+
+        private float GetMaxDensity()
+        {
+            float max = 0;
+            int width = simulation.VelocityU.GetLength(0);
+            int height = simulation.VelocityU.GetLength(1);
+
+            for (int x = 0; x < width; x++)
+            {
+                for (int y = 0; y < height; y++)
+                {
+                    float density = simulation.Density[x, y];
+                    if (density > max) max = density;
+                }
+            }
+            return max;
         }
 
         protected override System.Drawing.Bitmap Icon
