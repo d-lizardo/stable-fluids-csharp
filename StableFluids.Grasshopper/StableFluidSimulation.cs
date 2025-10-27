@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Rhino.Geometry;
 
 namespace FluidSimulation
@@ -14,25 +15,28 @@ namespace FluidSimulation
         private readonly float dt;
         private readonly float viscosity;
         private readonly float diffusion;
-        
+        private readonly int solverIterations;
+
         // Velocity fields (current and previous)
         private float[,] u, v;           // Current velocity
         private float[,] u_prev, v_prev; // Previous velocity
-        
+
         // Density field for visualization
         private float[,] density, density_prev;
-        
+
         // Temporary arrays for solver
         private float[,] temp1, temp2;
 
-        public StableFluidSimulation(int width, int height, float timeStep = 0.016f, 
-                                   float viscosity = 0.0001f, float diffusion = 0.0001f)
+        public StableFluidSimulation(int width, int height, float timeStep = 0.016f,
+                                   float viscosity = 0.0001f, float diffusion = 0.0001f,
+                                   int solverIterations = 10)
         {
             this.width = width;
             this.height = height;
             this.dt = timeStep;
             this.viscosity = viscosity;
             this.diffusion = diffusion;
+            this.solverIterations = solverIterations;
             
             // Initialize arrays
             u = new float[width, height];
@@ -132,65 +136,80 @@ namespace FluidSimulation
         }
 
         /// <summary>
-        /// Linear solver using Gauss-Seidel relaxation
+        /// Linear solver using Gauss-Seidel relaxation with parallelization
         /// </summary>
         private void LinearSolve(int b, float[,] x, float[,] x0, float a, float c)
         {
             float cRecip = 1.0f / c;
-            
-            // Iterate to solve the linear system
-            for (int k = 0; k < 20; k++)
+
+            // Iterate to solve the linear system (reduced iterations for speed)
+            for (int k = 0; k < solverIterations; k++)
             {
-                for (int j = 1; j < height - 1; j++)
+                // Use red-black Gauss-Seidel for parallelization
+                // Red cells (i+j is even)
+                Parallel.For(1, height - 1, j =>
                 {
                     for (int i = 1; i < width - 1; i++)
                     {
-                        x[i, j] = (x0[i, j] + a * (x[i + 1, j] + x[i - 1, j] + 
-                                                   x[i, j + 1] + x[i, j - 1])) * cRecip;
+                        if ((i + j) % 2 == 0)
+                        {
+                            x[i, j] = (x0[i, j] + a * (x[i + 1, j] + x[i - 1, j] +
+                                                       x[i, j + 1] + x[i, j - 1])) * cRecip;
+                        }
                     }
-                }
+                });
+
+                // Black cells (i+j is odd)
+                Parallel.For(1, height - 1, j =>
+                {
+                    for (int i = 1; i < width - 1; i++)
+                    {
+                        if ((i + j) % 2 == 1)
+                        {
+                            x[i, j] = (x0[i, j] + a * (x[i + 1, j] + x[i - 1, j] +
+                                                       x[i, j + 1] + x[i, j - 1])) * cRecip;
+                        }
+                    }
+                });
+
                 SetBoundary(b, x);
             }
         }
 
         /// <summary>
-        /// Advection step using semi-Lagrangian method
+        /// Advection step using semi-Lagrangian method with parallelization
         /// </summary>
         private void Advect(int b, float[,] d, float[,] d0, float[,] velocX, float[,] velocY, float dt)
         {
-            float i0, i1, j0, j1;
             float dtx = dt * (width - 2);
             float dty = dt * (height - 2);
-            float s0, s1, t0, t1;
-            float tmp1, tmp2, x, y;
-
             float Nfloat = width - 2;
             float Mfloat = height - 2;
-            int i, j;
 
-            for (j = 1; j < height - 1; j++)
+            // Parallelize the outer loop
+            Parallel.For(1, height - 1, j =>
             {
-                for (i = 1; i < width - 1; i++)
+                for (int i = 1; i < width - 1; i++)
                 {
-                    tmp1 = dtx * velocX[i, j];
-                    tmp2 = dty * velocY[i, j];
-                    x = i - tmp1;
-                    y = j - tmp2;
+                    float tmp1 = dtx * velocX[i, j];
+                    float tmp2 = dty * velocY[i, j];
+                    float x = i - tmp1;
+                    float y = j - tmp2;
 
                     if (x < 0.5f) x = 0.5f;
                     if (x > Nfloat + 0.5f) x = Nfloat + 0.5f;
-                    i0 = (float)Math.Floor(x);
-                    i1 = i0 + 1.0f;
-                    
+                    float i0 = (float)Math.Floor(x);
+                    float i1 = i0 + 1.0f;
+
                     if (y < 0.5f) y = 0.5f;
                     if (y > Mfloat + 0.5f) y = Mfloat + 0.5f;
-                    j0 = (float)Math.Floor(y);
-                    j1 = j0 + 1.0f;
+                    float j0 = (float)Math.Floor(y);
+                    float j1 = j0 + 1.0f;
 
-                    s1 = x - i0;
-                    s0 = 1.0f - s1;
-                    t1 = y - j0;
-                    t0 = 1.0f - t1;
+                    float s1 = x - i0;
+                    float s0 = 1.0f - s1;
+                    float t1 = y - j0;
+                    float t0 = 1.0f - t1;
 
                     int i0i = (int)i0;
                     int i1i = (int)i1;
@@ -200,40 +219,41 @@ namespace FluidSimulation
                     d[i, j] = s0 * (t0 * d0[i0i, j0i] + t1 * d0[i0i, j1i]) +
                               s1 * (t0 * d0[i1i, j0i] + t1 * d0[i1i, j1i]);
                 }
-            }
+            });
+
             SetBoundary(b, d);
         }
 
         /// <summary>
-        /// Projection step to ensure divergence-free velocity field
+        /// Projection step to ensure divergence-free velocity field with parallelization
         /// </summary>
         private void Project(float[,] velocX, float[,] velocY, float[,] p, float[,] div)
         {
-            // Calculate divergence
-            for (int j = 1; j < height - 1; j++)
+            // Calculate divergence (parallelized)
+            Parallel.For(1, height - 1, j =>
             {
                 for (int i = 1; i < width - 1; i++)
                 {
-                    div[i, j] = -0.5f * (velocX[i + 1, j] - velocX[i - 1, j] + 
+                    div[i, j] = -0.5f * (velocX[i + 1, j] - velocX[i - 1, j] +
                                          velocY[i, j + 1] - velocY[i, j - 1]) / width;
                     p[i, j] = 0;
                 }
-            }
-            
+            });
+
             SetBoundary(0, div);
             SetBoundary(0, p);
             LinearSolve(0, p, div, 1, 4);
 
-            // Subtract pressure gradient
-            for (int j = 1; j < height - 1; j++)
+            // Subtract pressure gradient (parallelized)
+            Parallel.For(1, height - 1, j =>
             {
                 for (int i = 1; i < width - 1; i++)
                 {
                     velocX[i, j] -= 0.5f * (p[i + 1, j] - p[i - 1, j]) * width;
                     velocY[i, j] -= 0.5f * (p[i, j + 1] - p[i, j - 1]) * width;
                 }
-            }
-            
+            });
+
             SetBoundary(1, velocX);
             SetBoundary(2, velocY);
         }

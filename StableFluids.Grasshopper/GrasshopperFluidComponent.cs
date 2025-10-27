@@ -31,13 +31,14 @@ namespace FluidSimulation.Grasshopper
             pManager.AddNumberParameter("World Height", "WH", "Physical height of simulation domain", GH_ParamAccess.item, 100.0);
             pManager.AddNumberParameter("Viscosity", "Visc", "Fluid viscosity", GH_ParamAccess.item, 0.0001);
             pManager.AddNumberParameter("Diffusion", "Diff", "Density diffusion rate", GH_ParamAccess.item, 0.0001);
+            pManager.AddIntegerParameter("Solver Iterations", "Iter", "Number of solver iterations (lower = faster, higher = more accurate)", GH_ParamAccess.item, 10);
             pManager.AddGenericParameter("Motion Profile", "MP", "Motion profile defining the movement through fluid", GH_ParamAccess.item);
             pManager.AddNumberParameter("Progress", "P", "Progress through motion profile (0.0 to 1.0)", GH_ParamAccess.item, 0.0);
             pManager.AddNumberParameter("Force Scale", "FS", "Scale factor for applied forces", GH_ParamAccess.item, 10.0);
             pManager.AddBooleanParameter("Reset", "R", "Reset simulation", GH_ParamAccess.item, false);
 
             // Make motion profile optional for backward compatibility
-            pManager[6].Optional = true; // Motion Profile
+            pManager[7].Optional = true; // Motion Profile
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
@@ -55,6 +56,7 @@ namespace FluidSimulation.Grasshopper
             int width = 64, height = 64;
             double worldWidth = 100.0, worldHeight = 100.0;
             double viscosity = 0.0001, diffusion = 0.0001;
+            int solverIterations = 10;
             FluidSimulation.MotionProfile motionProfile = null;
             double progress = 0.0;
             double forceScale = 10.0;
@@ -66,17 +68,18 @@ namespace FluidSimulation.Grasshopper
             DA.GetData(3, ref worldHeight);
             DA.GetData(4, ref viscosity);
             DA.GetData(5, ref diffusion);
-            DA.GetData(6, ref motionProfile);
-            DA.GetData(7, ref progress);
-            DA.GetData(8, ref forceScale);
-            DA.GetData(9, ref reset);
+            DA.GetData(6, ref solverIterations);
+            DA.GetData(7, ref motionProfile);
+            DA.GetData(8, ref progress);
+            DA.GetData(9, ref forceScale);
+            DA.GetData(10, ref reset);
 
             // Initialize or reset simulation
             if (!simulationInitialized || reset ||
                 (simulation != null && (simulation.VelocityU.GetLength(0) != width ||
                 simulation.VelocityU.GetLength(1) != height)))
             {
-                simulation = new StableFluidSimulation(width, height, 0.016f, (float)viscosity, (float)diffusion);
+                simulation = new StableFluidSimulation(width, height, 0.016f, (float)viscosity, (float)diffusion, solverIterations);
                 visualization = new FluidVisualization(simulation);
                 simulationInitialized = true;
             }
@@ -85,7 +88,7 @@ namespace FluidSimulation.Grasshopper
             if (motionProfile != null && progress > 0)
             {
                 // Reset simulation to clean state first
-                simulation = new StableFluidSimulation(width, height, 0.016f, (float)viscosity, (float)diffusion);
+                simulation = new StableFluidSimulation(width, height, 0.016f, (float)viscosity, (float)diffusion, solverIterations);
                 visualization = new FluidVisualization(simulation);
 
                 // Execute motion profile up to the specified progress with world scale
