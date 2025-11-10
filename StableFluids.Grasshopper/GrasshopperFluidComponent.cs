@@ -380,57 +380,100 @@ namespace FluidSimulation.Grasshopper
     }
 
     /// <summary>
-    /// Component to convert single curve to simulation steps
+    /// Component to convert multiple curves to simulation steps with linking motion
     /// </summary>
     public class MoveFromCurve : GH_Component
     {
         public MoveFromCurve()
-            : base("Curve to Single Move", "MoveFromCurve",
-                "Converts curve object to motion profile for fluid simu",
+            : base("Curves to Motion Profile", "CurvesToMotion",
+                "Converts curves to motion profile with linking motion between curves",
                 "Physics", "Simulation")
         {
         }
         protected override void RegisterInputParams(GH_Component.GH_InputParamManager pManager)
         {
-            pManager.AddCurveParameter("Curve", "C", "Curve To Traverse", GH_ParamAccess.item);
-            pManager.AddNumberParameter("Speed", "S", "Constant Speed of Traversal", GH_ParamAccess.item, 1.0);
-            pManager.AddNumberParameter("Timestep", "dT", "Simulation Timestep", GH_ParamAccess.item, 0.016f);
+            pManager.AddCurveParameter("Curves", "C", "Curves to traverse in sequence", GH_ParamAccess.list);
+            pManager.AddNumberParameter("Speed", "S", "Constant speed of traversal", GH_ParamAccess.item, 1.0);
+            pManager.AddNumberParameter("Timestep", "dT", "Simulation timestep", GH_ParamAccess.item, 0.016f);
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
         {
-            pManager.AddGenericParameter("Motion Profile", "MP", "Motion Profile object defining all steps for simulation", GH_ParamAccess.item);
+            pManager.AddGenericParameter("Motion Profile", "MP", "Motion profile object defining all steps for simulation", GH_ParamAccess.item);
+            pManager.AddTextParameter("Info", "I", "Information about the motion profile", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
         {
             // Get input parameters
-            Curve curve = null;
+            List<Curve> curves = new List<Curve>();
             double speed = 1.0;
             double timestep = 0.016;
 
-            DA.GetData(0, ref curve);
+            DA.GetDataList(0, curves);
             DA.GetData(1, ref speed);
             DA.GetData(2, ref timestep);
 
-            // Calculate number of steps
-            float stepDistance = (float)(speed * timestep);
-
-            // Divide curve into points
-            var curveParams = curve.DivideByLength(stepDistance, true);
-
-            // Get points and tangents
-            var curvePoints = new List<Point3d>();
-            var curveTangents = new List<Vector3d>();
-            for (int i = 0; i < curveParams.Length; i++)
+            if (curves.Count == 0)
             {
-                curvePoints.Add(curve.PointAt(curveParams[i]));
-                curveTangents.Add(curve.TangentAt(curveParams[i]));
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "No curves provided");
+                return;
             }
 
-            // Create motion profile object
-            var motionProfile = new FluidSimulation.MotionProfile(curvePoints, curveTangents, (float)timestep);
+            // Create motion profile
+            var motionProfile = new FluidSimulation.MotionProfile();
+            float currentTime = 0f;
+            float stepDistance = (float)(speed * timestep);
+
+            int totalSteps = 0;
+            int totalLinkSteps = 0;
+
+            for (int curveIndex = 0; curveIndex < curves.Count; curveIndex++)
+            {
+                var curve = curves[curveIndex];
+
+                // Divide curve into points
+                var curveParams = curve.DivideByLength(stepDistance, true);
+
+                // Add motion steps for this curve
+                for (int i = 0; i < curveParams.Length; i++)
+                {
+                    Point3d position = curve.PointAt(curveParams[i]);
+                    Vector3d tangent = curve.TangentAt(curveParams[i]);
+                    tangent.Unitize();
+                    Vector3d velocity = tangent * speed;
+
+                    motionProfile.AddStep(position, velocity, currentTime);
+                    currentTime += (float)timestep;
+                    totalSteps++;
+                }
+
+                // Add linking motion to next curve (if there is one)
+                if (curveIndex < curves.Count - 1)
+                {
+                    Point3d endOfCurrentCurve = curve.PointAtEnd;
+                    Point3d startOfNextCurve = curves[curveIndex + 1].PointAtStart;
+
+                    double linkDistance = endOfCurrentCurve.DistanceTo(startOfNextCurve);
+                    int linkSteps = (int)Math.Ceiling(linkDistance / stepDistance);
+
+                    // Add steps with zero velocity (no forces applied, just time passing)
+                    for (int i = 0; i < linkSteps; i++)
+                    {
+                        // Interpolate position during link (even though no forces are applied)
+                        double t = (i + 1) / (double)linkSteps;
+                        Point3d linkPosition = endOfCurrentCurve + t * (startOfNextCurve - endOfCurrentCurve);
+
+                        motionProfile.AddStep(linkPosition, Vector3d.Zero, currentTime);
+                        currentTime += (float)timestep;
+                        totalLinkSteps++;
+                    }
+                }
+            }
+
+            // Output motion profile and info
             DA.SetData(0, motionProfile);
+            DA.SetData(1, $"Curves: {curves.Count} | Motion Steps: {totalSteps} | Link Steps: {totalLinkSteps} | Total: {totalSteps + totalLinkSteps}");
         }
         protected override System.Drawing.Bitmap Icon => null;
 
